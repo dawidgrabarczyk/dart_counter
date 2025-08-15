@@ -1,0 +1,503 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>DartCam – 2‑urządzenia + gra online (GitHub Pages)</title>
+  <meta name="description" content="DartCam: przeglądarkowe zliczanie punktów z tarczy darta. Tryb 2‑urządzeniowy (telefon jako kamera + widz) i gra online P2P (WebRTC).">
+  <style>
+    :root{ --bg:#0f172a; --card:#111827; --muted:#94a3b8; --text:#e5e7eb;
+           --accent:#22c55e; --danger:#ef4444; --warning:#f59e0b; --info:#38bdf8; }
+    *{box-sizing:border-box}
+    html,body{margin:0;background:var(--bg);color:var(--text);
+      font-family:system-ui,-apple-system,Segoe UI,Roboto,Inter,Ubuntu,Arial,sans-serif}
+    h1{font-size:1.1rem;margin:0 0 .5rem}
+    h2{font-size:1rem;margin:1rem 0 .25rem;color:var(--muted)}
+    .wrap{display:grid;grid-template-columns:1.4fr .9fr .9fr;gap:16px;max-width:1600px;margin:0 auto;padding:16px}
+    .panel{background:var(--card);border-radius:16px;padding:12px;box-shadow:0 10px 30px rgba(0,0,0,.25)}
+    .controls{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+    .controls button,.controls input,.controls select,.controls textarea{width:100%}
+    button{background:#1f2937;color:var(--text);border:1px solid #374151;border-radius:12px;
+      padding:10px 12px;font-weight:600;cursor:pointer}
+    button:hover{background:#111827}
+    button.primary{background:var(--accent);border-color:#16a34a;color:#052e16}
+    button.warn{background:var(--warning);border-color:#d97706;color:#141006}
+    button.danger{background:var(--danger);border-color:#b91c1c;color:#2a0909}
+    button.info{background:var(--info);border-color:#0284c7;color:#04131a}
+    .small{font-size:.85rem;color:var(--muted)}
+    .row{display:flex;gap:8px;align-items:center}
+    .row > label{flex:1}
+    .row > input[type="range"]{flex:3}
+    .canvasBox{position:relative;aspect-ratio:16/9;background:#000;border-radius:12px;overflow:hidden}
+    video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:none}
+    #remote{display:none}
+    canvas{position:absolute;inset:0;width:100%;height:100%}
+    .score{font-size:2rem;font-weight:800}
+    .totals{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}
+    .list{max-height:380px;overflow:auto;border:1px solid #374151;border-radius:12px;padding:8px}
+    .pill{display:inline-block;padding:2px 8px;border-radius:999px;background:#0b3d2a;color:#a7f3d0;font-weight:700}
+    .kbd{font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;background:#0b1220;border:1px solid #1f2937;border-radius:6px;padding:2px 6px}
+    .hint{background:#0b1220;border:1px dashed #334155;border-radius:12px;padding:10px;margin-top:8px}
+    .badge{font-weight:700;color:#051b11;background:#bbf7d0;border:1px solid #86efac;padding:2px 8px;border-radius:999px}
+    .footer{color:var(--muted);font-size:.8rem;margin-top:8px}
+    .inline{display:inline-flex;gap:6px;align-items:center}
+    textarea{min-height:120px;background:#0b1220;color:#e5e7eb;border:1px solid #334155;border-radius:12px;padding:8px;font-family:ui-monospace,monospace}
+    @media(max-width:1280px){.wrap{grid-template-columns:1fr 1fr}.extra{grid-column:1 / -1}}
+    @media(max-width:900px){.wrap{grid-template-columns:1fr}}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <!-- KAMERA / PODGLĄD -->
+    <div class="panel">
+      <h1>DartCam 🎯 – kamera & wykrywanie (2‑urządzenia + online)</h1>
+      <div class="row" style="gap:12px; margin:6px 0 10px">
+        <label>Tryb urządzenia:</label>
+        <select id="role">
+          <option value="camera">📱 Telefon jako KAMERA (detekcja + wysyłka)</option>
+          <option value="viewer">💻 Komp/Tablet/Telefon jako WIDZ (odbiór)</option>
+          <option value="solo">🧪 SOLO (na 1 urządzeniu)</option>
+        </select>
+      </div>
+      <div class="canvasBox" id="box">
+        <video id="video" playsinline muted></video>
+        <video id="remote" playsinline autoplay></video>
+        <canvas id="view"></canvas>
+        <canvas id="overlay"></canvas>
+      </div>
+      <div class="controls" style="margin-top:10px">
+        <button id="btnStart" class="primary">Włącz kamerę (na KAMERZE)</button>
+        <button id="btnPause">Pauza podglądu</button>
+        <button id="btnBg" title="Zapisz obraz pustej tarczy">Zapisz tło (pusta tarcza)</button>
+        <button id="btnDetect" class="warn" title="Wykryj najnowszy rzut">Wykryj rzut</button>
+        <button id="btnUndo">Cofnij ostatni rzut</button>
+        <button id="btnReset" class="danger">Reset sesji</button>
+      </div>
+
+      <div class="panel" style="margin-top:10px">
+        <h2>Kalibracja tarczy</h2>
+        <div class="small">1) Ustaw telefon tak, by tarcza wypełniała kadr i była możliwie frontalnie. 2) Przeciągnij <span class="kbd">●</span> środek i pierścienie. 3) Ustaw orientację tak, by <b>20</b> było u góry.</div>
+        <div class="row" style="margin-top:8px"><label>Próg różnicowania (szum) <span id="threshVal" class="badge">28</span></label><input type="range" id="rngThresh" min="5" max="80" value="28"></div>
+        <div class="row"><label>Wygładzanie maski <span id="smoothVal" class="badge">1×</span></label><input type="range" id="rngSmooth" min="0" max="3" value="1"></div>
+        <div class="row"><label>Orientacja sektorów (°) <span id="angleVal" class="badge">0</span></label><input type="range" id="rngAngle" min="-180" max="180" value="0"></div>
+        <div class="row"><label>Skala tarczy (dodat. margines) <span id="scaleVal" class="badge">0%</span></label><input type="range" id="rngScale" min="-10" max="20" value="0"></div>
+        <div class="hint">💡 2 urządzenia: na <b>KAMERZE</b> kliknij <b>Zapisz tło</b>. Po rzucie na <b>WIDZU</b> kliknij <b>Wykryj rzut</b> – wyśle komendę do kamery, która wykona detekcję i odeśle wynik (plus stream wideo).</div>
+      </div>
+
+      <div class="footer">
+        ⚠️ Ta wersja jest gotowa na **GitHub Pages (HTTPS)**, więc kamera działa poprawnie. Jeśli testujesz lokalnie, użyj też HTTPS lub <b>localhost</b>.
+      </div>
+    </div>
+
+    <!-- WYNIKI / GRA -->
+    <div class="panel">
+      <h2>Wyniki</h2>
+      <div class="totals">
+        <div>Aktualny rzut: <div class="score" id="lastScore">–</div></div>
+        <div>Suma: <div class="score" id="sumScore">0</div></div>
+        <div>Rzuty: <div class="score" id="throwCount">0</div></div>
+      </div>
+      <h2>Lista rzutów</h2>
+      <div class="list" id="log"></div>
+      <h2>Eksport</h2>
+      <div class="controls">
+        <button id="btnSaveCfg">Zapisz kalibrację</button>
+        <button id="btnLoadCfg">Wczytaj kalibrację</button>
+        <button id="btnExportCSV">Eksport wyników (CSV)</button>
+      </div>
+
+      <div class="panel extra" style="margin-top:10px">
+        <h2>Gra online (WebRTC P2P)</h2>
+        <div class="small">Interaktywna gra przez internet (P2P). Jeden gracz może być KAMERĄ, drugi WIDZEM, albo obaj kamerami. Parowanie bez serwera – <b>kopiuj/wklej</b> SDP. Domyślny STUN: Google.</div>
+        <div class="controls">
+          <button id="btnOffer" class="info">Utwórz ofertę (start)</button>
+          <button id="btnCopyOffer">Kopiuj ofertę</button>
+          <button id="btnSetAnswer">Ustaw odpowiedź</button>
+          <button id="btnCopyAnswer">Kopiuj odpowiedź (z widza)</button>
+        </div>
+        <div class="row" style="margin-top:8px"><label>Oferta (SDP):</label></div>
+        <textarea id="taOffer" placeholder="Tu pojawi się oferta. Wyślij ją przeciwnikowi."></textarea>
+        <div class="row" style="margin-top:8px"><label>Odpowiedź (SDP) od drugiej strony:</label></div>
+        <textarea id="taAnswer" placeholder="Wklej tutaj odpowiedź i kliknij 'Ustaw odpowiedź'."></textarea>
+        <div class="hint">Po połączeniu obraz z kamery leci do WIDZA, a wyniki/komendy kanałem danych. Jeśli nie łączy, spróbuj odwrotnie (druga strona tworzy ofertę) lub upewnij się, że sieć/NAT zezwala na połączenia UDP/STUN.</div>
+      </div>
+    </div>
+
+    <!-- POŁĄCZENIE / STATUS -->
+    <div class="panel">
+      <h2>Stan połączenia</h2>
+      <div id="connStatus" class="hint">Niepołączony.</div>
+      <div class="controls" style="margin-top:10px">
+        <button id="btnDetectRemote" class="warn">(Z WIDZA) Poproś kamerę o detekcję</button>
+        <button id="btnSync" class="info">Synchronizuj stan</button>
+        <button id="btnHangup" class="danger">Rozłącz</button>
+      </div>
+      <h2>Diagnostyka kamery</h2>
+      <div id="cameraDiag" class="hint">–</div>
+      <h2>Wskazówki</h2>
+      <div class="small">
+        • iOS Safari: jeśli czarny obraz – sprawdź Ustawienia → Safari → Kamera (zezwól).<br/>
+        • Android Chrome: jeśli brak kamery przy plikach lokalnych – użyj serwera lub GitHub Pages (HTTPS).<br/>
+        • Różne sieci NAT mogą blokować WebRTC P2P – wtedy pomagają alternatywne STUN/TURN (obsługa TURN do dodania).
+      </div>
+    </div>
+  </div>
+
+<script>
+(function(){
+  // === ELEMENTY UI ===
+  const roleSel = document.getElementById('role');
+  const video = document.getElementById('video');
+  const remoteVideo = document.getElementById('remote');
+  const canvas = document.getElementById('view');
+  const overlay = document.getElementById('overlay');
+  const box = document.getElementById('box');
+  const ctx = canvas.getContext('2d');
+  const octx = overlay.getContext('2d');
+
+  const btnStart = document.getElementById('btnStart');
+  const btnPause = document.getElementById('btnPause');
+  const btnBg = document.getElementById('btnBg');
+  const btnDetect = document.getElementById('btnDetect');
+  const btnUndo = document.getElementById('btnUndo');
+  const btnReset = document.getElementById('btnReset');
+  const btnSaveCfg = document.getElementById('btnSaveCfg');
+  const btnLoadCfg = document.getElementById('btnLoadCfg');
+  const btnExportCSV = document.getElementById('btnExportCSV');
+
+  const rngThresh = document.getElementById('rngThresh');
+  const rngSmooth = document.getElementById('rngSmooth');
+  const rngAngle  = document.getElementById('rngAngle');
+  const rngScale  = document.getElementById('rngScale');
+  const threshVal = document.getElementById('threshVal');
+  const smoothVal = document.getElementById('smoothVal');
+  const angleVal  = document.getElementById('angleVal');
+  const scaleVal  = document.getElementById('scaleVal');
+
+  const lastScore = document.getElementById('lastScore');
+  const sumScore = document.getElementById('sumScore');
+  const throwCount = document.getElementById('throwCount');
+  const log = document.getElementById('log');
+  const connStatus = document.getElementById('connStatus');
+  const cameraDiag = document.getElementById('cameraDiag');
+
+  const btnOffer = document.getElementById('btnOffer');
+  const btnCopyOffer = document.getElementById('btnCopyOffer');
+  const btnSetAnswer = document.getElementById('btnSetAnswer');
+  const btnCopyAnswer = document.getElementById('btnCopyAnswer');
+  const taOffer = document.getElementById('taOffer');
+  const taAnswer = document.getElementById('taAnswer');
+  const btnDetectRemote = document.getElementById('btnDetectRemote');
+  const btnSync = document.getElementById('btnSync');
+  const btnHangup = document.getElementById('btnHangup');
+
+  // === STAN ===
+  let running=false, paused=false;
+  let bgImage = null;
+  let bakedMask = null;
+  let throws=[]; let total=0;
+  let role = roleSel.value; // 'camera' | 'viewer' | 'solo'
+
+  // Kalibracja tarczy
+  const calib = {
+    cx: 0, cy: 0,
+    rBull: 20, rOuterBull: 35,
+    rTripleIn: 100, rTripleOut: 120,
+    rDoubleIn: 170, rDoubleOut: 190,
+    angleOffsetDeg: 0,
+    scalePad: 0,
+  };
+
+  const sectorOrder = [20,1,18,4,13,6,10,15,2,17,3,19,7,16,8,11,14,9,12,5];
+
+  function resizeCanvases(){
+    const rect = box.getBoundingClientRect();
+    canvas.width = overlay.width = rect.width;
+    canvas.height = overlay.height = rect.height;
+  }
+  window.addEventListener('resize', resizeCanvases);
+  resizeCanvases();
+
+  // === KAMERA: bezpieczny kontekst + constraints ===
+  async function startCam(){
+    if(!window.isSecureContext){
+      cameraDiag.innerHTML = '❌ To NIE jest bezpieczny kontekst (HTTPS/localhost). Otwórz stronę przez HTTPS (GitHub Pages).';
+      alert('Kamera wymaga HTTPS lub localhost.');
+      return;
+    }
+    try{
+      const constraints = { video: { facingMode: 'environment', width:{ideal:1280}, height:{ideal:720} }, audio:false };
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      video.srcObject = stream; await video.play();
+      video.style.display='block'; remoteVideo.style.display='none';
+      running = true; paused=false; drawLoop();
+      cameraDiag.innerHTML = '✅ Kamera działa. Uprawnienia przyznane.';
+    }catch(e){
+      cameraDiag.innerHTML = '❌ Błąd kamery: '+e.name+': '+e.message+
+        '<br/>Wskazówki: HTTPS (GitHub Pages), zezwól w uprawnieniach, przełącz aparat tylny/przedni.';
+      alert('Nie udało się uruchomić kamery: '+e.message);
+    }
+  }
+
+  // === RYSOWANIE ===
+  function drawLoop(){
+    if(!running) return;
+    if(!paused){
+      if(role!=='viewer'){
+        try{ ctx.drawImage(video, 0,0, canvas.width, canvas.height); }catch{}
+      } else {
+        try{ ctx.drawImage(remoteVideo, 0,0, canvas.width, canvas.height); }catch{}
+      }
+    }
+    drawOverlay();
+    requestAnimationFrame(drawLoop);
+  }
+
+  function drawOverlay(){
+    const {cx, cy, rBull, rOuterBull, rTripleIn, rTripleOut, rDoubleIn, rDoubleOut, angleOffsetDeg} = calib;
+    octx.clearRect(0,0,overlay.width, overlay.height);
+
+    // ciemna maska poza D-out
+    octx.save();
+    octx.fillStyle='rgba(0,0,0,0.25)';
+    octx.beginPath(); octx.rect(0,0,overlay.width, overlay.height);
+    octx.moveTo(cx,cy); octx.arc(cx,cy, rDoubleOut*(1+calib.scalePad/100), 0, Math.PI*2);
+    octx.closePath(); octx.fill('evenodd'); octx.restore();
+
+    const rings=[[ '#22c55e', rBull],[ '#a7f3d0', rOuterBull],[ '#60a5fa', rTripleIn],[ '#60a5fa', rTripleOut],[ '#fda4af', rDoubleIn],[ '#fda4af', rDoubleOut]];
+    rings.forEach(([color,r])=>{ circle(cx,cy,r,true,color) });
+
+    const deg2rad = d=>d*Math.PI/180;
+    for(let i=0;i<20;i++){
+      const base = -90 + i*18 + angleOffsetDeg;
+      const a = deg2rad(base);
+      const x1=cx+Math.cos(a)*rOuterBull; const y1=cy+Math.sin(a)*rOuterBull;
+      const x2=cx+Math.cos(a)*rDoubleOut; const y2=cy+Math.sin(a)*rDoubleOut;
+      octx.strokeStyle = i===0?'#f59e0b':'rgba(255,255,255,0.2)';
+      octx.lineWidth = i===0?3:1;
+      octx.beginPath(); octx.moveTo(x1,y1); octx.lineTo(x2,y2); octx.stroke();
+      const mid = base+9; const am=deg2rad(mid);
+      const tx=cx+Math.cos(am)*(rDoubleOut+16); const ty=cy+Math.sin(am)*(rDoubleOut+16);
+      octx.fillStyle='#cbd5e1'; octx.font='600 12px ui-sans-serif,system-ui,Segoe UI'; octx.textAlign='center'; octx.textBaseline='middle';
+      octx.fillText(sectorOrder[i], tx, ty);
+    }
+
+    drawHandle(cx,cy,'#22c55e');
+    [rBull,rOuterBull,rTripleIn,rTripleOut,rDoubleIn,rDoubleOut].forEach((r,i)=>{
+      const hx=cx+r; const hy=cy; drawHandle(hx,hy,['#22c55e','#a7f3d0','#60a5fa','#60a5fa','#fda4af','#fda4af'][i]);
+    });
+  }
+  function circle(x,y,r,dashed=false,color='#60a5fa'){
+    octx.save(); if(dashed) octx.setLineDash([6,6]); else octx.setLineDash([]);
+    octx.strokeStyle=color; octx.lineWidth=2; octx.beginPath(); octx.arc(x,y,r,0,Math.PI*2); octx.stroke(); octx.restore();
+  }
+  function drawHandle(x,y,color='#fff'){
+    octx.save(); octx.fillStyle=color; octx.strokeStyle='#000'; octx.lineWidth=2; octx.beginPath(); octx.arc(x,y,6,0,Math.PI*2); octx.fill(); octx.stroke(); octx.restore();
+  }
+
+  // Drag & drop kalibracji
+  let dragTarget=null;
+  overlay.addEventListener('pointerdown',ev=>{
+    const pos = pointerPos(ev); const {cx,cy} = calib;
+    const handles=[{key:'center',x:cx,y:cy},{key:'rBull',x:cx+calib.rBull,y:cy},{key:'rOuterBull',x:cx+calib.rOuterBull,y:cy},{key:'rTripleIn',x:cx+calib.rTripleIn,y:cy},{key:'rTripleOut',x:cx+calib.rTripleOut,y:cy},{key:'rDoubleIn',x:cx+calib.rDoubleIn,y:cy},{key:'rDoubleOut',x:cx+calib.rDoubleOut,y:cy},];
+    const hit = handles.find(h=>dist(pos.x,pos.y,h.x,h.y)<=12);
+    if(hit){ dragTarget=hit.key; overlay.setPointerCapture(ev.pointerId); }
+  });
+  overlay.addEventListener('pointermove',ev=>{
+    if(!dragTarget) return; const pos = pointerPos(ev);
+    if(dragTarget==='center'){ calib.cx=pos.x; calib.cy=pos.y; }
+    else { const r = Math.max(5, dist(pos.x,pos.y, calib.cx, calib.cy)); calib[dragTarget]=r; }
+  });
+  overlay.addEventListener('pointerup',ev=>{ dragTarget=null; overlay.releasePointerCapture(ev.pointerId); });
+  function pointerPos(ev){ const rect = overlay.getBoundingClientRect(); return {x:(ev.clientX-rect.left), y:(ev.clientY-rect.top)}; }
+  function dist(x1,y1,x2,y2){ const dx=x1-x2, dy=y1-y2; return Math.hypot(dx,dy); }
+
+  // === UI ZDARZENIA ===
+  btnStart.addEventListener('click', startCam);
+  btnPause.addEventListener('click', ()=>{ paused=!paused; btnPause.textContent = paused? 'Wznów podgląd' : 'Pauza podglądu'; });
+  btnBg.addEventListener('click', captureBackground);
+  btnDetect.addEventListener('click', ()=>{ if(role==='viewer'){ sendMsg({type:'requestDetect'}); } else { detectThrow(); } });
+  btnUndo.addEventListener('click', undoThrow);
+  btnReset.addEventListener('click', ()=>{ resetAll(); sendMsg({type:'reset'}); });
+  btnSaveCfg.addEventListener('click', saveCfg);
+  btnLoadCfg.addEventListener('click', loadCfg);
+  btnExportCSV.addEventListener('click', exportCSV);
+  roleSel.addEventListener('change',()=>{ role = roleSel.value; updateRoleUI(); });
+
+  rngThresh.addEventListener('input',()=>{ threshVal.textContent=rngThresh.value });
+  rngSmooth.addEventListener('input',()=>{ smoothVal.textContent=rngSmooth.value+'×' });
+  rngAngle.addEventListener('input',()=>{ angleVal.textContent=rngAngle.value; calib.angleOffsetDeg=+rngAngle.value; broadcastState(); });
+  rngScale.addEventListener('input',()=>{ scaleVal.textContent=rngScale.value+'%'; calib.scalePad=+rngScale.value; });
+
+  function updateRoleUI(){
+    if(role==='viewer'){ video.style.display='none'; remoteVideo.style.display='block'; }
+    else { video.style.display='block'; }
+  }
+
+  // startowe promienie
+  calib.cx = overlay.width/2; calib.cy = overlay.height/2;
+  calib.rBull = Math.min(overlay.width,overlay.height)/20;
+  calib.rOuterBull = calib.rBull*1.8;
+  calib.rTripleIn = Math.min(overlay.width,overlay.height)/3;
+  calib.rTripleOut = calib.rTripleIn*1.18;
+  calib.rDoubleIn = Math.min(overlay.width,overlay.height)/2.4;
+  calib.rDoubleOut = calib.rDoubleIn*1.12;
+
+  function captureBackground(){
+    if(role==='viewer'){ alert('Tło zapisujemy na urządzeniu KAMERA.'); return; }
+    bgImage = getFrameImage();
+    bakedMask = new Uint8ClampedArray(bgImage.width*bgImage.height);
+    alert('Tło zapisane. Teraz rzuć i naciśnij \"Wykryj rzut\".');
+  }
+  function getFrameImage(){ const w=canvas.width, h=canvas.height; return ctx.getImageData(0,0,w,h); }
+
+  // Morfologia
+  function morph(mask, w,h, passes){ if(passes<=0) return mask; let out = mask.slice(); for(let p=0;p<passes;p++){ let er = out.slice(); for(let y=1;y<h-1;y++){ for(let x=1;x<w-1;x++){ const i=y*w+x; if(!out[i]){er[i]=0; continue} let all=1; for(let dy=-1;dy<=1;dy++) for(let dx=-1;dx<=1;dx++){ if(!out[i+dy*w+dx]){all=0;} } er[i]=all?1:0; } } let dl = er.slice(); for(let y=1;y<h-1;y++){ for(let x=1;x<w-1;x++){ const i=y*w+x; if(er[i]){dl[i]=1; continue} let any=0; for(let dy=-1;dy<=1;dy++) for(let dx=-1;dx<=1;dx++){ if(er[i+dy*w+dx]){any=1;} } dl[i]=any?1:0; } } out = dl; } return out; }
+
+  function detectThrow(){
+    if(role==='viewer'){ sendMsg({type:'requestDetect'}); return; }
+    if(!bgImage){ alert('Najpierw zapisz tło pustej tarczy.'); return; }
+    const frame = getFrameImage();
+    const w=frame.width, h=frame.height;
+
+    const diffMask = new Uint8ClampedArray(w*h);
+    const thr = +rngThresh.value;
+    for(let i=0;i<w*h;i++){
+      const r = frame.data[i*4+0], g=frame.data[i*4+1], b=frame.data[i*4+2];
+      const rb = bgImage.data[i*4+0], gb=bgImage.data[i*4+1], bb=bgImage.data[i*4+2];
+      const d = Math.abs(r-rb)+Math.abs(g-gb)+Math.abs(b-bb);
+      diffMask[i] = (d>thr*3)?1:0;
+    }
+
+    const pad = 1+calib.scalePad/100;
+    for(let y=0;y<h;y++) for(let x=0;x<w;x++){ const rr = dist(x,y,calib.cx,calib.cy); if(rr>calib.rDoubleOut*pad) diffMask[y*w+x]=0; }
+
+    if(bakedMask){ for(let i=0;i<w*h;i++) if(bakedMask[i]) diffMask[i]=0; }
+
+    const passes = +rngSmooth.value; const mask = morph(diffMask,w,h,passes);
+
+    const labels = new Int32Array(w*h).fill(-1); const comps=[]; let cur=0; const qx=new Int32Array(w*h), qy=new Int32Array(w*h);
+    for(let y=1;y<h-1;y++) for(let x=1;x<w-1;x++){
+      const idx=y*w+x; if(mask[idx]===0 || labels[idx]!==-1) continue;
+      let minx=x,maxx=x,miny=y,maxy=y, area=0, sumx=0,sumy=0; let head=0,tail=0; qx[tail]=x; qy[tail]=y; tail++; labels[idx]=cur;
+      while(head<tail){ const cx1=qx[head], cy1=qy[head]; head++; const i=cy1*w+cx1; area++; sumx+=cx1; sumy+=cy1; if(cx1<minx)minx=cx1; if(cx1>maxx)maxx=cx1; if(cy1<miny)miny=cy1; if(cy1>maxy)maxy=cy1; const nb=[[1,0],[-1,0],[0,1],[0,-1]]; for(const [dx,dy] of nb){ const nx=cx1+dx, ny=cy1+dy, ni=ny*w+nx; if(nx<=0||ny<=0||nx>=w-1||ny>=h-1) continue; if(mask[ni]===1 && labels[ni]===-1){ labels[ni]=cur; qx[tail]=nx; qy[tail]=ny; tail++; } }
+      }
+      const cx2=sumx/area, cy2=sumy/area; comps.push({id:cur, area, minx,maxx,miny,maxy, cx:cx2, cy:cy2}); cur++;
+    }
+
+    if(comps.length===0){ beep(180,0.05); lastScore.textContent='–'; return; }
+
+    comps.sort((a,b)=>b.area-a.area); let chosen=comps[0];
+    const dcenter = dist(chosen.cx,chosen.cy, calib.cx, calib.cy);
+    if(dcenter>calib.rDoubleOut*1.2){ chosen = comps.find(c=> dist(c.cx,c.cy,calib.cx,calib.cy) < calib.rDoubleOut*1.05) || chosen; }
+
+    let tip={x:chosen.cx|0, y:chosen.cy|0, r:1e9};
+    for(let y=chosen.miny; y<=chosen.maxy; y++) for(let x=chosen.minx; x<=chosen.maxx; x++){
+      const i=y*w+x; if(labels[i]!==chosen.id) continue; const rr=dist(x,y, calib.cx, calib.cy); if(rr<tip.r){ tip={x,y,r:rr}; }
+    }
+
+    const scoreInfo = scoreAt(tip.x, tip.y);
+    drawTipAndScore(tip, scoreInfo);
+    bakeComponentIntoBackground(frame, labels, chosen.id);
+    appendThrow(scoreInfo, tip);
+    broadcastState();
+  }
+
+  function bakeComponentIntoBackground(frame, labels, id){ if(!bgImage) return; const w=frame.width, h=frame.height; for(let y=0;y<h;y++) for(let x=0;x<w;x++){ const i=y*w+x; if(labels[i]===id){ bgImage.data[i*4+0]=frame.data[i*4+0]; bgImage.data[i*4+1]=frame.data[i*4+1]; bgImage.data[i*4+2]=frame.data[i*4+2]; bgImage.data[i*4+3]=255; bakedMask[i]=1; } } }
+
+  function scoreAt(x,y){ const {cx,cy,rBull,rOuterBull,rTripleIn,rTripleOut,rDoubleIn,rDoubleOut,angleOffsetDeg} = calib; const dx=x-cx, dy=y-cy; const r=Math.hypot(dx,dy); const padFactor = 1+calib.scalePad/100; if(r>rDoubleOut*padFactor) return {points:0, ring:'miss', sector:null, label:'Miss'}; if(r<=rBull) return {points:50, ring:'DB', sector:25, label:'Bull (50)'}; if(r<=rOuterBull) return {points:25, ring:'SB', sector:25, label:'Outer Bull (25)'}; let ang = Math.atan2(dy,dx) * 180/Math.PI; ang = (ang + 450) % 360; ang = (ang + angleOffsetDeg + 360) % 360; const idx = Math.floor(ang / 18) % 20; const sector = sectorOrder[idx]; let mult=1, ring='S'; if(r>=rTripleIn && r<=rTripleOut){ mult=3; ring='T'; } else if(r>=rDoubleIn && r<=rDoubleOut){ mult=2; ring='D'; } const points = mult*sector; const label = (mult===3?'Triple ':(mult===2?'Double ':'Single '))+sector; return {points, ring, sector, label}; }
+
+  function drawTipAndScore(tip, info){ octx.save(); octx.beginPath(); octx.arc(tip.x, tip.y, 6, 0, Math.PI*2); octx.fillStyle = info.points>0? '#22c55e' : '#ef4444'; octx.strokeStyle = '#000'; octx.lineWidth=2; octx.fill(); octx.stroke(); octx.font='700 18px ui-sans-serif,system-ui'; octx.textAlign='left'; octx.textBaseline='bottom'; octx.fillStyle='#111827'; const txt = `${info.label}: ${info.points}`; const tw = octx.measureText(txt).width+12; const th=26; const px = Math.min(overlay.width-tw-8, tip.x+10); const py = Math.max(th+8, tip.y-10); octx.fillRect(px, py-th, tw, th); octx.strokeStyle='#22c55e'; octx.lineWidth=2; octx.strokeRect(px, py-th, tw, th); octx.fillStyle='#e5e7eb'; octx.fillText(txt, px+6, py-6); octx.restore(); }
+
+  function appendThrow(info, tip){ throws.push({ts:Date.now(), info, tip}); total += info.points; lastScore.textContent = info.points; sumScore.textContent = total; throwCount.textContent = throws.length; const row = document.createElement('div'); row.style.borderBottom='1px dashed #334155'; row.style.padding='6px 4px'; row.innerHTML = `<div class="inline"><span class="pill">${info.ring}</span><b style="margin-left:6px">${info.points}</b><span style="color:#94a3b8"> – ${info.label}</span></div><div class="small">x:${tip.x|0}, y:${tip.y|0}</div>`; log.prepend(row); beep(880,0.07); }
+
+  function undoThrow(){ if(throws.length===0){ beep(180,0.05); return; } const last = throws.pop(); total -= last.info.points; sumScore.textContent = total; throwCount.textContent = throws.length; lastScore.textContent = '–'; alert('Cofnięto wynik. Najlepiej ponownie zapisać tło przed kolejnym rzutem.'); broadcastState(); }
+  function resetAll(){ throws=[]; total=0; sumScore.textContent='0'; throwCount.textContent='0'; lastScore.textContent='–'; log.innerHTML=''; bgImage=null; bakedMask=null; }
+
+  function saveCfg(){ const cfg={calib, thresh:+rngThresh.value, smooth:+rngSmooth.value}; localStorage.setItem('dartcam_cfg', JSON.stringify(cfg)); alert('Zapisano kalibrację w przeglądarce.'); }
+  function loadCfg(){ const raw=localStorage.getItem('dartcam_cfg'); if(!raw){ alert('Brak zapisanej kalibracji.'); return; } try{ const cfg=JSON.parse(raw); Object.assign(calib, cfg.calib||{}); rngThresh.value = cfg.thresh??rngThresh.value; threshVal.textContent=rngThresh.value; rngSmooth.value = cfg.smooth??rngSmooth.value; smoothVal.textContent=rngSmooth.value+'×'; rngAngle.value = calib.angleOffsetDeg; angleVal.textContent=rngAngle.value; drawOverlay(); broadcastState(); }catch(e){ alert('Nie udało się wczytać konfiguracji.'); } }
+
+  function exportCSV(){ const lines=['timestamp,points,ring,sector,x,y']; for(const t of throws){ lines.push(`${new Date(t.ts).toISOString()},${t.info.points},${t.info.ring},${t.info.sector??''},${t.tip.x|0},${t.tip.y|0}`); } const blob = new Blob([lines.join('\\n')], {type:'text/csv'}); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href=url; a.download='dartcam_wyniki.csv'; a.click(); URL.revokeObjectURL(url); }
+  function beep(freq=440, duration=0.05){ const ctx = new (window.AudioContext||window.webkitAudioContext)(); const o = ctx.createOscillator(); const g = ctx.createGain(); o.frequency.value=freq; o.connect(g); g.connect(ctx.destination); o.start(); g.gain.exponentialRampToValueAtTime(0.00001, ctx.currentTime+duration); setTimeout(()=>{o.stop(); ctx.close();}, duration*1000+50); }
+
+  // === WEBRTC: P2P video + datachannel (gra online) ===
+  let pc=null, dc=null; let localStream=null;
+  const iceServers=[{urls:['stun:stun.l.google.com:19302','stun:stun1.l.google.com:19302']}];
+
+  function updateConnStatus(msg){ connStatus.innerHTML = msg; }
+
+  async function ensurePC(){
+    if(pc) return pc;
+    pc = new RTCPeerConnection({iceServers});
+    pc.oniceconnectionstatechange = ()=>{ updateConnStatus('ICE: '+pc.iceConnectionState); };
+    pc.onconnectionstatechange = ()=>{ updateConnStatus('Połączenie: '+pc.connectionState); };
+    pc.ontrack = (ev)=>{ remoteVideo.srcObject = ev.streams[0]; remoteVideo.style.display='block'; };
+    pc.ondatachannel = (ev)=>{ dc = ev.channel; wireDC(); };
+
+    if(role!=='viewer'){
+      if(video.srcObject){ localStream = video.srcObject; }
+      else {
+        if(window.isSecureContext){
+          try{ localStream = await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}, audio:false}); }
+          catch(e){ /* brak */ }
+        }
+      }
+      if(localStream){ localStream.getTracks().forEach(t=>pc.addTrack(t, localStream)); }
+      dc = pc.createDataChannel('game'); wireDC();
+    }
+    return pc;
+  }
+
+  function wireDC(){ if(!dc) return; dc.onopen = ()=>{ updateConnStatus('Kanał danych otwarty.'); broadcastState(); }; dc.onmessage = (ev)=>{ try{ const msg=JSON.parse(ev.data); handleMsg(msg); }catch{} } }
+  function sendMsg(obj){ if(dc && dc.readyState==='open'){ dc.send(JSON.stringify(obj)); } }
+  function broadcastState(){ sendMsg({type:'state', total, count:throws.length, last:throws[throws.length-1]?.info?.points||null, throws:throws.slice(0,50), calib, ui:{thresh:+rngThresh.value, smooth:+rngSmooth.value, angle:calib.angleOffsetDeg, scale:calib.scalePad}}); }
+
+  function handleMsg(msg){
+    if(msg.type==='state'){
+      if(role==='viewer'){
+        lastScore.textContent = msg.last??'–'; sumScore.textContent= msg.total??0; throwCount.textContent= msg.count??0; log.innerHTML='';
+        (msg.throws||[]).slice().reverse().forEach(t=>{ const row=document.createElement('div'); row.style.borderBottom='1px dashed #334155'; row.style.padding='6px 4px'; row.innerHTML=`<div class="inline"><span class="pill">${t.info?.ring||''}</span><b style="margin-left:6px">${t.info?.points||''}</b><span style="color:#94a3b8"> – ${t.info?.label||''}</span></div>`; log.prepend(row); });
+        Object.assign(calib, msg.calib||{}); rngAngle.value = calib.angleOffsetDeg; angleVal.textContent=rngAngle.value; drawOverlay();
+      }
+    }
+    if(msg.type==='requestDetect' && role!=='viewer') detectThrow();
+    if(msg.type==='reset'){ resetAll(); }
+  }
+
+  // SYGNALIZACJA: kopiuj/wklej SDP (bez serwera)
+  btnOffer.addEventListener('click', async()=>{
+    await ensurePC();
+    const offer = await pc.createOffer({offerToReceiveVideo: role==='viewer'});
+    await pc.setLocalDescription(offer);
+    taOffer.value = JSON.stringify(pc.localDescription);
+    updateConnStatus('Oferta utworzona – skopiuj i prześlij drugiej stronie.');
+  });
+  btnCopyOffer.addEventListener('click', ()=>{ taOffer.select(); document.execCommand('copy'); updateConnStatus('Skopiowano ofertę.'); });
+  btnSetAnswer.addEventListener('click', async()=>{
+    if(!pc) await ensurePC();
+    try{
+      const desc = JSON.parse(taAnswer.value.trim());
+      await pc.setRemoteDescription(new RTCSessionDescription(desc));
+      updateConnStatus('Zdalna odpowiedź ustawiona.');
+    }catch(e){ alert('Błędny SDP odpowiedzi: '+e.message); }
+  });
+  btnCopyAnswer.addEventListener('click', async()=>{
+    await ensurePC();
+    try{
+      const desc = JSON.parse(taOffer.value.trim());
+      await pc.setRemoteDescription(new RTCSessionDescription(desc));
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      taAnswer.value = JSON.stringify(pc.localDescription);
+      updateConnStatus('Odpowiedź gotowa – wyślij ją twórcy oferty.');
+    }catch(e){ alert('Najpierw wklej poprawną ofertę: '+e.message); }
+  });
+
+  btnDetectRemote.addEventListener('click', ()=>{ sendMsg({type:'requestDetect'}); });
+  btnSync.addEventListener('click', broadcastState);
+  btnHangup.addEventListener('click', ()=>{ if(pc){ pc.close(); pc=null; dc=null; updateConnStatus('Rozłączono.'); } });
+
+})();
+</script>
+</body>
+</html>
